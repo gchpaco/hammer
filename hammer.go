@@ -2,10 +2,13 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"reflect"
 	"time"
 )
 
@@ -13,15 +16,25 @@ var reportEvery = flag.Duration("i", 10*time.Second, "reporting interval")
 var subReportEvery = flag.Int64("o", 100, "operations to perform before sub thread report")
 var concurrency = flag.Int("c", 10, "# of concurrent requests")
 
-func doRequest(url string) error {
-	resp, err := http.Get(url)
+func doRequest(target string) error {
+	resp, err := http.Get(target)
 	if err != nil {
-		return err
+		if urlerr, ok := err.(*url.Error); ok {
+			if urlerr.Err.Error() == "net/http: transport closed before response was received" {
+				// this is sinfully ugly, I'm afraid, but in this case we retry
+				// (once).  We have to match this way because the error in question
+				// is unexported.
+				resp, err = http.Get(target)
+			}
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("Error during GET: %s %s", err, reflect.ValueOf(err).Type())
 	}
 	defer resp.Body.Close()
 	_, err = ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return fmt.Errorf("Error during body read: %s", err)
 	}
 	return nil
 }
@@ -83,7 +96,7 @@ func logReports(in <-chan report) {
 			for _, rpt := range reports {
 				sum.Add(rpt)
 			}
-			log.Printf("Seen %d requests\t%2.2g%% errors\t%0.2gs response\n", sum.requests, sum.FailPercent(), sum.AvgDuration()/float64(time.Second))
+			fmt.Fprintf(os.Stdout, "Seen %12d requests %2.2g%% errors %0.2gs response\n", sum.requests, sum.FailPercent(), sum.AvgDuration()/float64(time.Second))
 		}
 	}
 }
